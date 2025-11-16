@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    body {
+      font-family: Arial, "微軟正黑體";
+      margin: 10px;
+      font-size: 13px;
+    }
+    .row {
+      margin-bottom: 8px;
+    }
+    label {
+      display: inline-block;
+      width: 70px;
+    }
+    select, button {
+      padding: 6px;
+      font-size: 13px;
+    }
+    #gridWrap {
+      overflow: auto;
+      max-height: 500px;
+      border: 1px solid #ddd;
+      padding: 8px;
+      margin-top: 8px;
+    }
+    table {
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 6px;
+      min-width: 80px;
+      text-align: center;
+    }
+    th.date {
+      background: #f6f6f6;
+    }
+    .small {
+      font-size: 12px;
+      color: #666;
+    }
+</style>
+</head>
+<body>
+<h3>廣青雲端全廣大課點名系統（Web）</h3>
+
+<div class="row">
+<label>組別</label>
+<select id="groupSel"></select>
+</div>
+
+<div class="row">
+<label>月份</label>
+<select id="monthSel"></select>
+</div>
+
+<div class="row">
+<button onclick="loadGrid()">產生互動表格</button>
+<button onclick="saveAll_v2()">儲存</button>
+<button onclick="clearGrid()">清除表格</button>
+</div>
+
+<div id="gridWrap"><div id="grid"></div></div>
+<div id="msg" class="small"></div>
+
+<script>
+let meta={students:[],dates:[],attendanceMap:{}};
+
+function init(){
+  google.script.run.withSuccessHandler(popGroups).getGroups();
+  google.script.run.withSuccessHandler(popMonths).getMonths();
+  document.getElementById('msg').innerText='請選組別與月份';
+}
+
+function popGroups(groups){
+  const sel=document.getElementById('groupSel');
+  sel.innerHTML='<option value="">(請選組別)</option>';
+  groups.forEach(g=>{ const opt=document.createElement('option'); opt.value=g; opt.text=g; sel.appendChild(opt); });
+}
+
+function popMonths(months){
+  const sel=document.getElementById('monthSel');
+  sel.innerHTML='<option value="">(請選月份)</option>';
+  months.forEach(m=>{ const opt=document.createElement('option'); opt.value=m; opt.text=m; sel.appendChild(opt); });
+}
+/*
+function loadGrid(){
+  const group=document.getElementById('groupSel').value;
+  const month=document.getElementById('monthSel').value;
+  if(!group||!month){ document.getElementById('msg').innerText='請先選組別與月份'; return; }
+  document.getElementById('msg').innerText='載入中...';
+  meta.students=[]; meta.dates=[];
+
+  google.script.run.withSuccessHandler(students=>{
+    meta.students=students; if(meta.dates.length) buildGrid();
+  }).getStudentsByGroup('A01');
+
+  google.script.run.withSuccessHandler(dates=>{
+    meta.dates=dates; if(meta.students.length) buildGrid();
+  }).getDatesByMonth('10');
+}
+*/
+
+function loadGrid(){
+    const group=document.getElementById('groupSel').value;
+    const month=document.getElementById('monthSel').value;
+    if(!group||!month){ document.getElementById('msg').innerText='請先選組別與月份'; return; }
+    document.getElementById('msg').innerText='載入中...';
+    meta.students=[]; meta.dates=[];
+
+    // 呼叫1: 載入學生資料
+    google.script.run
+      .withSuccessHandler(students=>{
+        console.log('成功載入學生資料:', students);
+        meta.students=students; 
+        //meta.students = [
+        //    {id: "S001", name: "張三", email: "zhang@example.com"},
+        //    {id: "S002", name: "李四", email: "lee@example.com"}
+        //];
+        if(meta.dates.length) buildGrid(); // 等待日期資料
+      })
+      .withFailureHandler(error=>{
+        console.error('載入學生資料失敗:', error);
+        document.getElementById('msg').innerText='載入學生資料失敗: ' + error.message;
+      })
+      .getStudentsByGroup(group);
+    
+    // 呼叫2: 載入日期資料  
+    google.script.run
+      .withSuccessHandler(dates=>{
+        console.log('成功載入日期資料:', dates);
+        meta.dates=dates; 
+        // meta.dates: ["10/03", "10/10", "10/17", "10/24", "10/31"]
+        if(meta.students.length) buildGrid(); // 等待學生資料
+      })
+      .withFailureHandler(error=>{
+        console.error('載入日期資料失敗:', error);
+        document.getElementById('msg').innerText='載入日期資料失敗: ' + error.message;
+      })
+      .getDatesByMonth(month);
+}
+
+
+function buildGrid(){
+    const container = document.getElementById('grid');
+    container.innerHTML = '';
+    
+    // 檢查學生資料
+    if(!meta.students.length){ 
+      container.innerHTML = '<div class="small">此組無學生</div>'; 
+      document.getElementById('msg').innerText = '此組無學生資料';
+      return; 
+    }
+  
+    // 檢查日期資料
+    if(!meta.dates.length){ 
+      container.innerHTML = '<div class="small">此月份無上課日</div>'; 
+      document.getElementById('msg').innerText = '此月份無上課日期';
+      return; 
+    }
+  
+    const table = document.createElement('table');
+    
+    // 建立表頭
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    hr.appendChild(tdEl('學籍編號', 'th'));
+    hr.appendChild(tdEl('姓名', 'th'));
+    meta.dates.forEach(d => hr.appendChild(tdEl(d, 'th', 'date')));
+    thead.appendChild(hr);
+    table.appendChild(thead);
+  
+    // 建立表身
+    const tbody = document.createElement('tbody');
+    meta.students.forEach((s, i) => {
+      const tr = document.createElement('tr');
+      tr.appendChild(tdEl(s.id));
+      tr.appendChild(tdEl(s.name));
+      
+      meta.dates.forEach(dt => {
+        const td = document.createElement('td');
+        const sel = document.createElement('select');
+        sel.setAttribute('data-student', s.id);
+        sel.setAttribute('data-date', dt);
+        
+        ['', '請假', '出席', '補課'].forEach(opt => { 
+          const o = document.createElement('option'); 
+          o.value = opt; 
+          o.text = (opt === '' ? '—' : opt); 
+          sel.appendChild(o); 
+        });
+        
+        td.appendChild(sel);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    
+    table.appendChild(tbody);
+    container.appendChild(table);
+    document.getElementById('msg').innerText = `載入完成，共 ${meta.students.length} 位學生，${meta.dates.length} 個上課日`;
+  }
+
+function tdEl(txt, tag, className){ 
+  const el = document.createElement(tag || 'td'); 
+  el.innerText = txt; 
+  if(className) el.className = className;
+  return el; 
+}
+
+function clearGrid(){ document.getElementById('grid').innerHTML=''; meta={students:[],dates:[],attendanceMap:{}}; document.getElementById('msg').innerText='已清除表格'; }
+
+function saveAll(){
+  const group=document.getElementById('groupSel').value;
+  const month=document.getElementById('monthSel').value;
+  if(!group||!month){ document.getElementById('msg').innerText='請先選組別與月份'; return; }
+  if(!meta.students.length||!meta.dates.length){ document.getElementById('msg').innerText='尚未產生表格'; return; }
+  const table=document.querySelector('#grid table'); if(!table){ document.getElementById('msg').innerText='尚無表格'; return; }
+
+  const records=[];
+  table.querySelectorAll('tbody tr').forEach((tr,i)=>{
+    const sid=meta.students[i].id;
+    const selects=tr.querySelectorAll('select');
+    selects.forEach((sel,j)=>{ const val=sel.value||''; if(val!=='') records.push({studentId:sid,date:meta.dates[j],status:val}); });
+  });
+
+  if(records.length===0){ document.getElementById('msg').innerText='沒有任何要儲存的項目'; return; }
+  document.getElementById('msg').innerText='儲存中...';
+
+  google.script.run
+    .withSuccessHandler(res=>{
+      document.getElementById('msg').innerText=res.message||'儲存完成';
+    })
+    .withFailureHandler(error=>{
+      document.getElementById('msg').innerText='儲存失敗: ' + error.message;
+    })
+    .saveAttendance_v2({group:group,month:month,records:records});
+}
+
+
+
+window.onload=init;
+</script>
+</body>
+</html>

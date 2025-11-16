@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    body {
+      font-family: Arial, "微軟正黑體";
+      margin: 10px;
+      font-size: 13px;
+    }
+    .row {
+      margin-bottom: 8px;
+    }
+    label {
+      display: inline-block;
+      width: 70px;
+    }
+    select, button {
+      padding: 6px;
+      font-size: 13px;
+    }
+    
+    /* 🎯 新增：學生選擇區域樣式 */
+    #studentSelector {
+      border: 1px solid #ddd;
+      padding: 10px;
+      margin: 10px 0;
+      background: #f9f9f9;
+      border-radius: 4px;
+      display: none; /* 預設隱藏 */
+    }
+    
+    .student-list {
+      max-height: 200px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      padding: 8px;
+      background: white;
+      margin-top: 8px;
+    }
+    
+    .student-item {
+      display: flex;
+      align-items: center;
+      padding: 4px 0;
+      border-bottom: 1px solid #eee;
+    }
+    
+    .student-item:last-child {
+      border-bottom: none;
+    }
+    
+    .student-item input[type="checkbox"] {
+      margin-right: 8px;
+    }
+    
+    .student-info {
+      flex: 1;
+      font-size: 13px;
+    }
+    
+    .student-id {
+      font-weight: bold;
+      color: #333;
+    }
+    
+    .student-name {
+      color: #666;
+      margin-left: 10px;
+    }
+    
+    .select-controls {
+      margin-bottom: 8px;
+    }
+    
+    .select-controls button {
+      margin-right: 5px;
+      font-size: 12px;
+      padding: 4px 8px;
+    }
+    
+    #gridWrap {
+      overflow: auto;
+      max-height: 500px;
+      border: 1px solid #ddd;
+      padding: 8px;
+      margin-top: 8px;
+    }
+    table {
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 6px;
+      min-width: 80px;
+      text-align: center;
+    }
+    th.date {
+      background: #f6f6f6;
+    }
+    .small {
+      font-size: 12px;
+      color: #666;
+    }
+    .loading-btn {
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .loading-btn::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+      animation: loading-sweep 1.5s infinite;
+    }
+    
+    @keyframes loading-sweep {
+      0% { left: -100%; }
+      100% { left: 100%; }
+    }
+    
+    .btn-error {
+      background-color: #ffebee !important;
+      animation: btn-error-shake 0.5s ease-in-out;
+    }
+    
+    @keyframes btn-error-shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-2px); }
+      75% { transform: translateX(2px); }
+    }
+</style>
+</head>
+<body>
+<h3>廣青雲端全廣大課點名系統（Web）</h3>
+
+<div class="row">
+<label>組別</label>
+<select id="groupSel" onchange="onGroupOrMonthChange()"></select>
+</div>
+
+<div class="row">
+<label>月份</label>
+<select id="monthSel" onchange="onGroupOrMonthChange()"></select>
+</div>
+
+<!-- 🎯 新增：學生選擇區域 -->
+<div id="studentSelector">
+  <h4>選擇要顯示的學生：</h4>
+  <div class="select-controls">
+    <button type="button" onclick="selectAllStudents()">全選</button>
+    <button type="button" onclick="selectNoStudents()">全不選</button>
+    <button type="button" onclick="toggleStudentSelection()">反選</button>
+    <span id="selectedCount" class="small"></span>
+  </div>
+  <div class="student-list" id="studentList">
+    <!-- 學生列表將動態載入到這裡 -->
+  </div>
+</div>
+
+<div class="row">
+<button onclick="loadGrid()">產生互動表格</button>
+<button onclick="saveAll()">儲存</button>
+<button onclick="clearGrid()">清除表格</button>
+</div>
+
+<div id="gridWrap"><div id="grid"></div></div>
+<div id="msg" class="small"></div>
+
+<script>
+  let meta={students:[],dates:[],attendanceMap:{}, allStudents:[]};
+
+  // 🎯 按鈕配置表
+  const BUTTON_CONFIG = {
+    '產生互動表格': {
+      loading: '產生中...',
+      loadingRecord: '載入記錄中...',
+      original: '產生互動表格'
+    },
+    '儲存': {
+      loading: '儲存中...',
+      reloading: '重新載入中...',
+      original: '儲存'
+    },
+    '清除表格': {
+      loading: '清除中...',
+      original: '清除表格'
+    }
+  };
+
+  // 🎯 修復：新增缺失的 tdEl 函數
+  function tdEl(txt, tag, className) { 
+    const el = document.createElement(tag || 'td'); 
+    el.innerText = txt; 
+    if(className) el.className = className;
+    return el; 
+  }
+
+  // 🎯 新增：統一的日期格式轉換函數
+  function convertToBackendDate(frontendDate) {
+    let pureDate = frontendDate;
+    
+    // 處理包含年份的情況: "2025/10/1" -> "10/1"
+    if (pureDate.includes('/') && pureDate.split('/').length === 3) {
+      const parts = pureDate.split('/');
+      pureDate = `${parts[1]}/${parts[2]}`;
+    }
+    
+    // 處理包含星期的情況: "10/1 (二)" -> "10/1"
+    if (pureDate.includes('(')) {
+      pureDate = pureDate.split(' ')[0];
+    }
+    
+    return pureDate;
+  }
+
+  // 🎯 新增：按鈕狀態管理函數
+  function setButtonStates(activeButtonText, loadingText) {
+    const buttons = document.querySelectorAll('button');
+    
+    buttons.forEach(btn => {
+      const currentText = btn.textContent;
+      
+      if (currentText === activeButtonText || btn.textContent === loadingText) {
+        // 當前活動按鈕：禁用並顯示載入狀態
+        btn.disabled = true;
+        btn.textContent = loadingText;
+        btn.classList.add('loading-btn');
+        btn.style.opacity = '0.8';
+        btn.style.cursor = 'not-allowed';
+      } else {
+        // 其他按鈕：禁用並變灰
+        btn.disabled = true;
+        btn.style.opacity = '0.4';
+        btn.style.cursor = 'not-allowed';
+        btn.style.backgroundColor = '#f5f5f5';
+        btn.style.color = '#999';
+      }
+    });
+  }
+
+  // 🎯 恢復所有按鈕正常狀態
+  function resetButtonStates() {
+    const buttons = document.querySelectorAll('button');
+    
+    buttons.forEach(btn => {
+      btn.disabled = false;
+      btn.classList.remove('loading-btn', 'btn-error');
+      btn.style.opacity = '1';
+      btn.style.cursor = 'pointer';
+      btn.style.backgroundColor = '';
+      btn.style.color = '';
+      
+      // 🎯 智慧文字恢復
+      const currentText = btn.textContent;
+      
+      // 遍歷配置表找到對應的原始文字
+      for (const [originalText, config] of Object.entries(BUTTON_CONFIG)) {
+        if (currentText === config.loading || 
+            currentText === config.loadingRecord || 
+            currentText === config.reloading ||
+            currentText === originalText) {
+          btn.textContent = config.original;
+          break;
+        }
+      }
+    });
+  }
+
+  // 🎯 更新按鈕文字
+  function updateButtonText(fromText, toText) {
+    const buttons = document.querySelectorAll('button');
+    buttons.forEach(btn => {
+      if (btn.textContent === fromText) {
+        btn.textContent = toText;
+      }
+    });
+  }
+  
+  // 🎯 錯誤狀態處理
+  function setButtonError(buttonText) {
+    const buttons = document.querySelectorAll('button');
+    const errorBtn = Array.from(buttons).find(btn => 
+      btn.textContent === buttonText || 
+      btn.onclick?.toString().includes(buttonText)
+    );
+    
+    if (errorBtn) {
+      errorBtn.classList.add('btn-error');
+      setTimeout(() => {
+        if (errorBtn) {
+          errorBtn.classList.remove('btn-error');
+        }
+      }, 3000);
+    }
+  }
+
+  // 🎯 新增：當組別或月份改變時的處理
+  function onGroupOrMonthChange() {
+    const group = document.getElementById('groupSel').value;
+    const month = document.getElementById('monthSel').value;
+    
+    if (group && month) {
+      loadStudentList();
+    } else {
+      hideStudentSelector();
+    }
+  }
+
+  // 🎯 新增：載入學生列表
+  function loadStudentList() {
+    const group = document.getElementById('groupSel').value;
+    
+    if (!group) return;
+    
+    document.getElementById('msg').innerText = '載入學生列表中...';
+    
+    google.script.run
+      .withSuccessHandler(students => {
+        console.log('成功載入學生列表:', students);
+        meta.allStudents = students;
+        displayStudentList(students);
+        document.getElementById('msg').innerText = `載入完成，共 ${students.length} 位學生`;
+      })
+      .withFailureHandler(error => {
+        console.error('載入學生列表失敗:', error);
+        document.getElementById('msg').innerText = '載入學生列表失敗: ' + error.message;
+        hideStudentSelector();
+      })
+      .getStudentsByGroup(group);
+  }
+
+  // 🎯 新增：顯示學生列表
+  function displayStudentList(students) {
+    const studentList = document.getElementById('studentList');
+    const studentSelector = document.getElementById('studentSelector');
+    
+    if (!students || students.length === 0) {
+      studentList.innerHTML = '<div class="small">此組無學生</div>';
+      studentSelector.style.display = 'block';
+      return;
+    }
+    
+    studentList.innerHTML = '';
+    
+    students.forEach((student, index) => {
+      const studentItem = document.createElement('div');
+      studentItem.className = 'student-item';
+      
+      studentItem.innerHTML = `
+        <input type="checkbox" id="student_${student.id}" value="${student.id}" 
+               onchange="updateSelectedCount()" checked>
+        <label for="student_${student.id}" class="student-info">
+          <span class="student-id">${student.id}</span>
+          <span class="student-name">${student.name}</span>
+        </label>
+      `;
+      
+      studentList.appendChild(studentItem);
+    });
+    
+    studentSelector.style.display = 'block';
+    updateSelectedCount();
+  }
+
+  // 🎯 新增：隱藏學生選擇器
+  function hideStudentSelector() {
+    document.getElementById('studentSelector').style.display = 'none';
+    meta.allStudents = [];
+  }
+
+  // 🎯 新增：更新選擇數量顯示
+  function updateSelectedCount() {
+    const checkboxes = document.querySelectorAll('#studentList input[type="checkbox"]');
+    const checkedCount = document.querySelectorAll('#studentList input[type="checkbox"]:checked').length;
+    const totalCount = checkboxes.length;
+    
+    document.getElementById('selectedCount').innerText = `已選擇 ${checkedCount} / ${totalCount} 位學生`;
+  }
+
+  // 🎯 新增：全選學生
+  function selectAllStudents() {
+    const checkboxes = document.querySelectorAll('#studentList input[type="checkbox"]');
+    checkboxes.forEach(cb => cb.checked = true);
+    updateSelectedCount();
+  }
+
+  // 🎯 新增：全不選學生
+  function selectNoStudents() {
+    const checkboxes = document.querySelectorAll('#studentList input[type="checkbox"]');
+    checkboxes.forEach(cb => cb.checked = false);
+    updateSelectedCount();
+  }
+
+  // 🎯 新增：反選學生
+  function toggleStudentSelection() {
+    const checkboxes = document.querySelectorAll('#studentList input[type="checkbox"]');
+    checkboxes.forEach(cb => cb.checked = !cb.checked);
+    updateSelectedCount();
+  }
+
+  // 🎯 新增：取得選中的學生
+  function getSelectedStudents() {
+    const selectedIds = [];
+    const checkboxes = document.querySelectorAll('#studentList input[type="checkbox"]:checked');
+    
+    checkboxes.forEach(cb => {
+      selectedIds.push(cb.value);
+    });
+    
+    // 從 allStudents 中篩選出選中的學生
+    return meta.allStudents.filter(student => selectedIds.includes(student.id));
+  }
+  
+  function init(){
+    google.script.run.withSuccessHandler(popGroups).getGroups();
+    google.script.run.withSuccessHandler(popMonths).getMonths();
+    document.getElementById('msg').innerText='請選組別與月份';
+  }
+  
+  function popGroups(groups){
+    const sel=document.getElementById('groupSel');
+    sel.innerHTML='<option value="">(請選組別)</option>';
+    groups.forEach(g=>{ const opt=document.createElement('option'); opt.value=g; opt.text=g; sel.appendChild(opt); });
+  }
+  
+  function popMonths(months){
+    const sel=document.getElementById('monthSel');
+    sel.innerHTML='<option value="">(請選月份)</option>';
+    months.forEach(m=>{ const opt=document.createElement('option'); opt.value=m; opt.text=m; sel.appendChild(opt); });
+  }
+  
+  function loadGrid(){
+      const group=document.getElementById('groupSel').value;
+      const month=document.getElementById('monthSel').value;
+      if(!group||!month){ 
+        document.getElementById('msg').innerText='請先選組別與月份'; 
+        return; 
+      }
+
+      // 🎯 修改：使用選中的學生
+      const selectedStudents = getSelectedStudents();
+      if (selectedStudents.length === 0) {
+        document.getElementById('msg').innerText='請至少選擇一位學生';
+        return;
+      }
+      
+      // 🎯 禁用所有按鈕，當前按鈕顯示載入狀態
+      setButtonStates('產生互動表格', '產生中...');
+      document.getElementById('msg').innerText='載入中...';
+      meta.students = selectedStudents; // 🎯 直接使用選中的學生
+      meta.dates = [];
+  
+      let datesLoaded = false;
+  
+      // 🎯 修改：只需要載入日期資料，學生資料已經有了
+      google.script.run
+        .withSuccessHandler(dates=>{
+          console.log('成功載入日期資料:', dates);
+          meta.dates=dates; 
+          datesLoaded = true;
+          buildGrid();
+        })
+        .withFailureHandler(error=>{
+          console.error('載入日期資料失敗:', error);
+          document.getElementById('msg').innerText='載入日期資料失敗: ' + error.message;
+          resetButtonStates();
+          setButtonError('loadGrid');
+        })
+        .getDatesByMonth(month);
+  }
+
+  // 🎯 修復：增強的日期格式轉換和對應邏輯
+  function buildGrid(){
+    const container = document.getElementById('grid');
+    container.innerHTML = '';
+    
+    // 檢查學生資料
+    if(!meta.students.length){ 
+      container.innerHTML = '<div class="small">請選擇學生</div>'; 
+      document.getElementById('msg').innerText = '請選擇要顯示的學生';
+      resetButtonStates();
+      return; 
+    }
+  
+    // 檢查日期資料
+    if(!meta.dates.length){ 
+      container.innerHTML = '<div class="small">此月份無上課日</div>'; 
+      document.getElementById('msg').innerText = '此月份無上課日期';
+      resetButtonStates();
+      return; 
+    }
+
+    // 🎯 新增：調試日期資料
+    console.log('🗓️ 建立表格 - 前端日期列表:', meta.dates);
+    console.log('🗓️ 日期數量:', meta.dates.length);
+    
+    // 🎯 新增：轉換日期格式以便與後端對應
+    const backendDates = meta.dates.map(date => convertToBackendDate(date));
+    console.log('🗓️ 轉換後的後端日期格式:', backendDates);
+  
+    const table = document.createElement('table');
+    
+    // 建立表頭
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    hr.appendChild(tdEl('學籍編號', 'th'));
+    hr.appendChild(tdEl('姓名', 'th'));
+    
+    // 🎯 修復：在表頭中加入日期索引資訊（調試用）
+    meta.dates.forEach((d, index) => {
+      const th = tdEl(d, 'th', 'date');
+      th.setAttribute('data-date-index', index);
+      th.setAttribute('data-backend-date', convertToBackendDate(d));
+      hr.appendChild(th);
+    });
+    
+    thead.appendChild(hr);
+    table.appendChild(thead);
+  
+    // 建立表身
+    const tbody = document.createElement('tbody');
+    meta.students.forEach((s, i) => {
+      const tr = document.createElement('tr');
+      tr.appendChild(tdEl(s.id));
+      tr.appendChild(tdEl(s.name));
+      
+      meta.dates.forEach((dt, dateIndex) => {
+        const td = document.createElement('td');
+        const sel = document.createElement('select');
+        sel.setAttribute('data-student', s.id);
+        sel.setAttribute('data-date', dt);
+        sel.setAttribute('data-date-index', dateIndex);
+        sel.setAttribute('data-backend-date', convertToBackendDate(dt));
+        
+        ['', '請假', '出席', '補課'].forEach(opt => { 
+          const o = document.createElement('option'); 
+          o.value = opt; 
+          o.text = (opt === '' ? '—' : opt); 
+          sel.appendChild(o); 
+        });
+        
+        td.appendChild(sel);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    
+    table.appendChild(tbody);
+    container.appendChild(table);
+    
+    // 🎯 建立表格後，繼續載入既有記錄（保持按鈕禁用狀態）
+    document.getElementById('msg').innerText = `建立表格完成，正在載入既有記錄...`;
+    loadExistingAttendance();
+  }
+  
+  // 🎯 修復：增強的載入既有記錄邏輯
+  function loadExistingAttendance(){
+    const group = document.getElementById('groupSel').value;
+    const month = document.getElementById('monthSel').value;
+    
+    console.log(`🔍 開始載入既有記錄: 組別=${group}, 月份=${month}`);
+    console.log('🗓️ 前端日期格式:', meta.dates);
+    
+    // 🎯 使用新的更新函數
+    updateButtonText('產生中...', '載入記錄中...');
+    
+    document.getElementById('msg').innerText = '正在載入既有出席記錄...';
+    
+    google.script.run
+      .withSuccessHandler(records => {
+        console.log('📋 成功載入既有記錄:', records);
+        console.log('📊 記錄數量:', records.length);
+        
+        if(!records || records.length === 0) {
+          console.log('ℹ️ 沒有找到既有記錄');
+          document.getElementById('msg').innerText = 
+            `載入完成，共 ${meta.students.length} 位學生，${meta.dates.length} 個上課日，無既有記錄`;
+          
+          resetButtonStates();
+          return;
+        }
+        
+        // 🎯 新增：建立日期對應表
+        const dateMapping = {};
+        meta.dates.forEach((frontendDate, index) => {
+          const backendDate = convertToBackendDate(frontendDate);
+          dateMapping[backendDate] = {
+            frontendDate: frontendDate,
+            index: index
+          };
+        });
+        
+        console.log('🗓️ 日期對應表:', dateMapping);
+        
+        let loadedCount = 0;
+        let notFoundCount = 0;
+        let unmatchedRecords = [];
+        
+        records.forEach(record => {
+          console.log(`📝 處理記錄: ${record.studentId} ${record.date} = ${record.status}`);
+          
+          // 🎯 修復：使用對應表查找正確的前端日期
+          const dateMatch = dateMapping[record.date];
+          
+          if (dateMatch) {
+            const targetDate = dateMatch.frontendDate;
+            console.log(`✅ 日期匹配成功: ${record.date} -> ${targetDate} (索引: ${dateMatch.index})`);
+            
+            const selector = `select[data-student="${record.studentId}"][data-date="${targetDate}"]`;
+            const sel = document.querySelector(selector);
+            
+            if(sel) {
+              sel.value = record.status;
+              sel.style.backgroundColor = '#ffffcc';
+              loadedCount++;
+              console.log(`✅ 成功設定: ${record.studentId} ${targetDate} = ${record.status}`);
+            } else {
+              notFoundCount++;
+              console.warn(`❌ 找不到對應的選擇框: ${record.studentId} ${targetDate}`);
+              console.warn(`使用的選擇器: ${selector}`);
+              
+              // 🎯 新增：調試資訊
+              const allSelectors = document.querySelectorAll(`select[data-student="${record.studentId}"]`);
+              console.warn(`該學生的所有選擇框:`, Array.from(allSelectors).map(s => s.getAttribute('data-date')));
+            }
+          } else {
+            notFoundCount++;
+            unmatchedRecords.push(record);
+            console.warn(`❌ 找不到匹配的日期: ${record.date}`);
+            console.warn(`可用的後端日期:`, Object.keys(dateMapping));
+          }
+        });
+        
+        // 🎯 新增：詳細的調試資訊
+        if (unmatchedRecords.length > 0) {
+          console.warn('🚨 無法匹配的記錄:', unmatchedRecords);
+          console.warn('🗓️ 前端日期列表:', meta.dates);
+          console.warn('🗓️ 後端日期對應:', Object.keys(dateMapping));
+        }
+        
+        console.log(`📊 載入結果: 成功 ${loadedCount} 筆, 找不到 ${notFoundCount} 筆`);
+        
+        let message = `載入完成，共 ${meta.students.length} 位學生，${meta.dates.length} 個上課日，${loadedCount} 筆既有記錄`;
+        if(notFoundCount > 0) {
+          message += `，${notFoundCount} 筆記錄無法對應`;
+        }
+        document.getElementById('msg').innerText = message;
+        
+        resetButtonStates();
+      })
+      .withFailureHandler(error => {
+        console.error('❌ 載入既有記錄失敗:', error);
+        document.getElementById('msg').innerText = 
+          `載入完成，共 ${meta.students.length} 位學生，${meta.dates.length} 個上課日（載入既有記錄失敗: ${error.message})`;
+        
+        resetButtonStates();
+        setButtonError('loadGrid');
+      })
+      .getExistingAttendance(group, month);
+  }
+
+  function clearGrid(){ 
+    // 🎯 禁用所有按鈕，當前按鈕顯示載入狀態
+    setButtonStates('清除表格', '清除中...');
+    
+    // 模擬清除延遲（可選）
+    setTimeout(() => {
+      document.getElementById('grid').innerHTML=''; 
+      meta={students:[],dates:[],attendanceMap:{}, allStudents:meta.allStudents}; // 🎯 保留 allStudents
+      document.getElementById('msg').innerText='已清除表格';
+      
+      resetButtonStates();
+    }, 500);
+  }
+  
+  // 🎯 修復：增強的儲存邏輯
+  function saveAll(){
+    const group=document.getElementById('groupSel').value;
+    const month=document.getElementById('monthSel').value;
+    if(!group||!month){ 
+      document.getElementById('msg').innerText='請先選組別與月份'; 
+      return; 
+    }
+    if(!meta.students.length||!meta.dates.length){ 
+      document.getElementById('msg').innerText='尚未產生表格'; 
+      return; 
+    }
+    const table=document.querySelector('#grid table'); 
+    if(!table){ 
+      document.getElementById('msg').innerText='尚無表格'; 
+      return; 
+    }
+
+    // 🎯 禁用所有按鈕，當前按鈕顯示載入狀態
+    setButtonStates('儲存', '儲存中...');
+
+    console.log('💾 === 開始儲存到出席紀錄彙總 ===');
+    console.log('📋 組別:', group);
+    console.log('📅 月份:', month);
+    console.log('🗓️ 前端日期格式:', meta.dates);
+    console.log('👥 學生數量:', meta.students.length);
+
+    // 🎯 新格式：準備更新資料，包含學生資訊和出席記錄
+    const updateData = {
+      group: group,
+      month: month,
+      students: meta.students,  // 學生完整資訊
+      dates: meta.dates.map(date => convertToBackendDate(date)),  // 統一的日期格式
+      attendanceGrid: []  // 出席記錄網格
+    };
+
+    console.log('🗓️ 轉換後的日期格式:', updateData.dates);
+    console.log('📊 日期對應檢查:');
+    meta.dates.forEach((frontendDate, index) => {
+      const backendDate = convertToBackendDate(frontendDate);
+      console.log(`  ${index}: "${frontendDate}" -> "${backendDate}"`);
+    });
+
+    // 建立出席記錄網格
+    table.querySelectorAll('tbody tr').forEach((tr, studentIndex) => {
+      const studentId = meta.students[studentIndex].id;
+      const selects = tr.querySelectorAll('select');
+      
+      console.log(`👤 處理學生 ${studentIndex + 1}: ${studentId}`);
+      
+      const attendanceRow = [];
+      selects.forEach((sel, dateIndex) => { 
+        const val = sel.value || ''; 
+        
+        // 🎯 轉換為數字格式：0=請假, 1=出席, 2=補課, 空白=''
+        let numericValue = '';
+        if(val === '請假') numericValue = 0;
+        else if(val === '出席') numericValue = 1;
+        else if(val === '補課') numericValue = 2;
+        
+        attendanceRow.push(numericValue);
+        
+        if(val !== '') {
+          const fullDate = meta.dates[dateIndex];
+          const pureDate = convertToBackendDate(fullDate);
+          console.log(`    📝 記錄 ${dateIndex + 1}: ${studentId} ${fullDate} -> ${pureDate} = ${val} (${numericValue})`);
+        }
+      });
+      
+      updateData.attendanceGrid.push(attendanceRow);
+    });
+
+    console.log('📊 準備更新的網格資料:', updateData);
+    
+    // 檢查是否有任何出席記錄
+    const hasAnyRecord = updateData.attendanceGrid.some(row => 
+      row.some(cell => cell !== '')
+    );
+    
+    if(!hasAnyRecord) { 
+      console.warn('⚠️ 沒有任何記錄要儲存');
+      document.getElementById('msg').innerText = '沒有任何要儲存的項目'; 
+      
+      resetButtonStates();
+      return; 
+    }
+    
+    document.getElementById('msg').innerText = '正在更新出席紀錄彙總...';
+
+    // 🎯 呼叫後端函數：直接更新工作表
+    google.script.run
+      .withSuccessHandler(res => {
+        console.log('✅ 更新成功回應:', res);
+        document.getElementById('msg').innerText = res.message || '更新完成';
+        
+        // 🎯 修改：不立即恢復按鈕，改為更新按鈕狀態為重新載入
+        updateButtonText('儲存中...', '重新載入中...');
+        
+        // 🎯 重要：確保所有按鈕保持禁用狀態
+        const buttons = document.querySelectorAll('button');
+        buttons.forEach(btn => {
+          if (btn.textContent !== '重新載入中...') {
+            btn.disabled = true;
+            btn.style.opacity = '0.4';
+            btn.style.cursor = 'not-allowed';
+            btn.style.backgroundColor = '#f5f5f5';
+            btn.style.color = '#999';
+          }
+        });
+        
+        // 儲存成功後重新載入既有記錄（保持按鈕禁用狀態）
+        setTimeout(() => {
+          document.getElementById('msg').innerText = '正在重新載入既有記錄...';
+          loadExistingAttendanceAfterSave();
+        }, 1000);
+      })
+      .withFailureHandler(error => {
+        console.error('❌ 更新失敗:', error);
+        document.getElementById('msg').innerText = '更新失敗: ' + error.message;
+        
+        resetButtonStates();
+        setButtonError('saveAll');
+      })
+      .updateAttendanceSummary_optimized(updateData);
+    
+    console.log('📤 === 更新請求已發送 ===');
+  }
+
+  // 🎯 修復：重新載入記錄時使用相同邏輯
+  function loadExistingAttendanceAfterSave(){
+    const group = document.getElementById('groupSel').value;
+    const month = document.getElementById('monthSel').value;
+    
+    google.script.run
+      .withSuccessHandler(records => {
+        console.log('🔄 重新載入既有記錄:', records);
+        
+        if(!records || records.length === 0) {
+          document.getElementById('msg').innerText = 
+            `更新完成，共 ${meta.students.length} 位學生，${meta.dates.length} 個上課日，無既有記錄`;
+          
+          resetButtonStates();
+          return;
+        }
+        
+        let loadedCount = 0;
+        
+        // 清除之前的背景色
+        document.querySelectorAll('select').forEach(sel => {
+          sel.style.backgroundColor = '';
+        });
+        
+        // 🎯 修復：使用相同的日期對應邏輯
+        const dateMapping = {};
+        meta.dates.forEach((frontendDate, index) => {
+          const backendDate = convertToBackendDate(frontendDate);
+          dateMapping[backendDate] = {
+            frontendDate: frontendDate,
+            index: index
+          };
+        });
+        
+        records.forEach(record => {
+          const dateMatch = dateMapping[record.date];
+          
+          if (dateMatch) {
+            const targetDate = dateMatch.frontendDate;
+            const selector = `select[data-student="${record.studentId}"][data-date="${targetDate}"]`;
+            const sel = document.querySelector(selector);
+            
+            if(sel) {
+              sel.value = record.status;
+              sel.style.backgroundColor = '#ffffcc';
+              loadedCount++;
+            }
+          }
+        });
+        
+        document.getElementById('msg').innerText = 
+          `更新完成，共 ${meta.students.length} 位學生，${meta.dates.length} 個上課日，${loadedCount} 筆既有記錄`;
+        
+        resetButtonStates();
+      })
+      .withFailureHandler(error => {
+        console.error('❌ 重新載入既有記錄失敗:', error);
+        document.getElementById('msg').innerText = '更新完成，但重新載入記錄失敗';
+        
+        resetButtonStates();
+        setButtonError('saveAll');
+      })
+      .getExistingAttendance(group, month);
+  }
+  
+  window.onload=init;
+</script>
+
+</body>
+</html>
