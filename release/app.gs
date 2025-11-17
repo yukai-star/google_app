@@ -1,3 +1,10 @@
+// ==============================================================================
+// 🎯 外部試算表設定 (C 表："OOOO年點名紀錄查詢平台"試算表)
+// ⚠️ 必填：請將 YOUR_C_SHEET_ID_HERE 替換為 C 試算表的實際 ID。
+// ==============================================================================
+const C_SHEET_ID = "1Awc1wE-_rerRmneTS3icnIFaUyeEVmtuEMdj1rDdClc"; 
+const C_SHEET_NAME = "點名紀錄查詢"; // C 表中要讀取的分頁名稱
+
 // ---------- UI / Sidebar ----------
 function onOpen(){
   SpreadsheetApp.getUi()
@@ -78,31 +85,49 @@ function getStudentsByGroup_v2(group){
   return students;
 }
 
-// 取得既有出席記錄 - 適應實際工作表格式
+// 🎯 修正後的函數：從外部 C 試算表讀取既有出席記錄
 function getExistingAttendance(group, month){
   try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName('出席紀錄彙總');
+    const START_ROW = 4; // 學生資料開始的行號 (假設 C 表與 A 表結構一致)
+    const START_COL_DATE = 4; // 日期標題開始的欄位索引 (D=4)
+    
+    // 1. 檢查 C 表 ID 是否已設定
+    if (C_SHEET_ID === "YOUR_C_SHEET_ID_HERE") {
+        console.error("錯誤：C_SHEET_ID 未設定。請在程式碼頂部設定實際的 C 試算表 ID。");
+        return [];
+    }
+
+    // 2. 開啟外部試算表 (C 表)
+    const externalSs = SpreadsheetApp.openById(C_SHEET_ID);
+    
+    // 3. 取得 C 表中的目標分頁
+    const sheet = externalSs.getSheetByName(C_SHEET_NAME);
     
     if(!sheet) {
-      console.log('出席紀錄彙總工作表不存在');
+      console.log(`外部工作表 [${C_SHEET_NAME}] 不存在於 C 試算表中`);
       return [];
     }
     
     const lastRow = sheet.getLastRow();
     const lastCol = sheet.getLastColumn();
     
-    if(lastRow <= 3) { // 至少要有3行（總數、標題、星期）
-      console.log('出席紀錄彙總工作表無足夠資料');
+    if(lastRow < START_ROW) {
+      console.log(`[${C_SHEET_NAME}] 工作表無足夠資料`);
       return [];
     }
     
-    // 取得日期標題行（第2行，從D欄開始）
-    const dateHeaders = sheet.getRange(2, 4, 1, lastCol - 3).getValues()[0];
+    // 取得日期標題行（第2行，從 D 欄開始）
+    const numDateCols = lastCol - START_COL_DATE + 1;
+    let dateHeaders = [];
+    if (numDateCols > 0) {
+        // 從外部 C 表的第 2 行讀取日期標題
+        dateHeaders = sheet.getRange(2, START_COL_DATE, 1, numDateCols).getValues()[0];
+    }
     console.log('日期標題:', dateHeaders);
     
-    // 取得學生資料（從第4行開始）
-    const studentData = sheet.getRange(4, 1, lastRow - 3, lastCol).getValues();
+    // 取得學生資料（從第4行開始，到最後一欄）
+    const numStudents = lastRow - START_ROW + 1;
+    const studentData = sheet.getRange(START_ROW, 1, numStudents, lastCol).getValues();
     
     console.log(`查詢組別: ${group}, 月份: ${month}`);
     
@@ -110,9 +135,9 @@ function getExistingAttendance(group, month){
     
     // 處理每個學生的出席記錄
     studentData.forEach(row => {
+      // 學生資訊在 A, B, C 欄 (索引 0, 1, 2)
       const studentGroup = row[0] ? row[0].toString() : '';
       const studentId = row[1] ? row[1].toString() : '';
-      const studentName = row[2] ? row[2].toString() : '';
       
       // 檢查是否為目標組別的學生
       if(studentGroup !== group) {
@@ -124,46 +149,51 @@ function getExistingAttendance(group, month){
         if(!dateHeader) return; // 跳過空日期
         
         // 轉換日期格式
-        const dateStr = dateHeader.toString();
+        const dateStr = dateHeader instanceof Date ? Utilities.formatDate(dateHeader, Session.getScriptTimeZone(), "MM/dd") : dateHeader.toString();
         
-        // 檢查是否為目標月份的日期
-        // 支援 "10/01" 格式和其他可能的格式
-        const isTargetMonth = dateStr.startsWith(month + '/') || 
-                             dateStr.includes('/' + month + '/') ||
-                             (dateStr.includes('/') && dateStr.split('/')[0] === month);
+        // 檢查是否為目標月份的日期 (只需要檢查 MM/DD 中的月份部分)
+        const dateParts = dateStr.split('/');
+        // 確保月份是兩位數，例如 '10' vs '10'
+        const normalizedMonth = month.toString().padStart(2, '0');
+        const isTargetMonth = dateParts.length === 2 && dateParts[0].padStart(2, '0') === normalizedMonth;
         
         if(!isTargetMonth) {
           return; // 跳過非目標月份的日期
         }
         
-        // 取得出席狀態值（從D欄開始，所以是 dateIndex + 3）
+        // 取得出席狀態值（從 D 欄開始，所以是 dateIndex + 3）
         const statusValue = row[dateIndex + 3];
         
         // 轉換狀態值
         let status = '';
-        if(statusValue === 0 || statusValue === '0') status = '請假';
-        else if(statusValue === 1 || statusValue === '1') status = '出席';
-        else if(statusValue === 2 || statusValue === '2') status = '補課';
-        
+        if(statusValue === 0 || statusValue === '0' || statusValue === '請假') status = '請假';
+        else if(statusValue === 1 || statusValue === '1' || statusValue === '出席') status = '出席';
+        else if(statusValue === 2 || statusValue === '2' || statusValue === '補課') status = '補課';
+
         // 只有有狀態值才加入記錄
         if(status) {
           records.push({
             studentId: studentId,
-            date: dateStr,
+            date: dateStr, // 儲存 MM/DD 格式
             status: status
           });
         }
       });
     });
     
-    console.log(`找到 ${records.length} 筆既有記錄 (${group}-${month})`);
+    console.log(`找到 ${records.length} 筆既有記錄 (${group}-${month})，來源: ${C_SHEET_NAME} (外部 C 表)`);
     return records;
     
   } catch (error) {
     console.error('getExistingAttendance 錯誤:', error);
+    // 檢查是否為授權錯誤
+    if (error.message.includes('You do not have permission to access the requested document')) {
+      console.error('請檢查：腳本是否已重新授權存取外部 C 試算表？');
+    }
     return [];
   }
 }
+
 // 取得該月份上課日期
 function getDatesByMonth(month){
   var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('上課日期維護');
@@ -176,7 +206,7 @@ function getDatesByMonth(month){
   return sh.getRange(3,col,14,1).getValues().flat().filter(String);
 }
 
-// 儲存點名回「出席紀錄彙總」
+// 儲存點名回「出席紀錄彙總」 (A 表內部操作)
 function saveAttendance(payload){
   if(!payload || !payload.records) return {success:false,message:'payload empty'};
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -200,7 +230,6 @@ function saveAttendance(payload){
 
   return {success:true,message:'已回填 '+payload.records.length+' 筆資料'};
 }
-
 
 
 function saveAttendance_v2(payload){
@@ -401,20 +430,20 @@ function updateAttendanceSummary(updateData) {
         if (targetColumn) {
           const actualRowIndex = targetRowIndex + 4; // 轉換為實際行號
           
-          // 直接更新工作表中的單一儲存格
+          // 直接更新工作表中的單一儲存格 (較慢，但簡單)
           sheet.getRange(actualRowIndex, targetColumn).setValue(value);
           studentUpdatedCount++;
           
           if (value !== '') {
-            console.log(`  更新記錄: ${student.id} ${frontendDate} = ${value} (第${actualRowIndex}行第${targetColumn}欄)`);
+            console.log(`  更新記錄: ${student.id} ${frontendDate} = ${value} (第${actualRowIndex}行第${targetColumn}欄)`);
             updatedRecordCount++;
           }
         } else {
-          console.warn(`  找不到對應欄位: ${student.id} ${frontendDate}`);
+          console.warn(`  找不到對應欄位: ${student.id} ${frontendDate}`);
         }
       });
       
-      console.log(`  學生 ${student.id} 更新了 ${studentUpdatedCount} 個日期的記錄`);
+      console.log(`  學生 ${student.id} 更新了 ${studentUpdatedCount} 個日期的記錄`);
     });
     
     const result = {
@@ -536,7 +565,7 @@ function updateAttendanceSummary_optimized(updateData) {
       });
     });
     
-    // 4. 🚀 批量更新 - 按範圍分組更新
+    // 4. 🚀 批量更新 - 按範圍分組更新 (優化了多次讀寫的效能)
     if (updatesData.length > 0) {
       // 將更新按行分組
       const rowGroups = {};
@@ -597,10 +626,8 @@ function updateAttendanceSummary_optimized(updateData) {
   }
 }
 
-
-
 // --------------------------------------
-// 測試函數
+// 測試函數 (保持不變)
 // --------------------------------------
 
 // 取得學生名單 V2 測試選取特定組別名單
@@ -620,12 +647,12 @@ function testGetDatesByMonth() {
   return result;
 }
 
-// 測試取得既有出席記錄 - 針對實際工作表格式
+// 測試取得既有出席記錄 - 針對新的外部資料來源
 function testGetExistingAttendance() {
   var group = 'A01'; // 測試 A01 組別
-  var month = '10';  // 測試10月份
+  var month = '10';  // 測試10月份
   
-  console.log(`測試取得既有出席記錄 - 組別: ${group}, 月份: ${month}`);
+  console.log(`測試取得既有出席記錄 (來源: ${C_SHEET_NAME} 外部表) - 組別: ${group}, 月份: ${month}`);
   
   var result = getExistingAttendance(group, month);
   
@@ -634,17 +661,17 @@ function testGetExistingAttendance() {
   if(result.length > 0) {
     console.log('範例記錄:');
     result.slice(0, 15).forEach((record, index) => { // 顯示前15筆
-      console.log(`  ${index + 1}. 學籍編號: ${record.studentId}, 日期: ${record.date}, 狀態: ${record.status}`);
+      console.log(`  ${index + 1}. 學籍編號: ${record.studentId}, 日期: ${record.date}, 狀態: ${record.status}`);
     });
   } else {
-    console.log('沒有找到任何記錄');
+    console.log('沒有找到任何記錄 (請檢查 C 表 ID 和授權)');
   }
   
   return result;
 }
 
 
-// 檢查工作表實際結構
+// 檢查工作表實際結構 (A 表內)
 function checkActualSheetStructure() {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -660,41 +687,37 @@ function checkActualSheetStructure() {
     
     console.log(`工作表大小: ${lastRow} 行 x ${lastCol} 欄`);
     
-    // 檢查第1行 (總數資訊)
+    // ... (其餘的檢查邏輯) ...
     if(lastRow >= 1) {
       const row1 = sheet.getRange(1, 1, 1, Math.min(5, lastCol)).getValues()[0];
       console.log('第1行 (總數):', row1);
     }
     
-    // 檢查第2行 (日期標題行)
     if(lastRow >= 2) {
       const row2 = sheet.getRange(2, 1, 1, Math.min(10, lastCol)).getValues()[0];
       console.log('第2行 (日期標題):', row2);
     }
     
-    // 檢查第3行 (星期)
     if(lastRow >= 3) {
       const row3 = sheet.getRange(3, 1, 1, Math.min(10, lastCol)).getValues()[0];
       console.log('第3行 (星期):', row3);
     }
     
-    // 檢查前幾個學生資料
     if(lastRow >= 4) {
       const studentRows = sheet.getRange(4, 1, Math.min(5, lastRow - 3), Math.min(8, lastCol)).getValues();
       console.log('學生資料範例:');
       studentRows.forEach((row, index) => {
-        console.log(`  學生${index + 1}: 組別=${row[0]}, 學籍編號=${row[1]}, 姓名=${row[2]}, 出席狀態=${row.slice(3, 7)}`);
+        console.log(`  學生${index + 1}: 組別=${row[0]}, 學籍編號=${row[1]}, 姓名=${row[2]}, 出席狀態=${row.slice(3, 7)}`);
       });
     }
     
-    // 檢查 A01 組別的學生
-    console.log('\n=== A01 組別學生 ===');
+    console.log('\n=== A01 組別學生 (A表內) ===');
     if(lastRow >= 4) {
       const allStudents = sheet.getRange(4, 1, lastRow - 3, 3).getValues();
       const a01Students = allStudents.filter(row => row[0] === 'A01');
       console.log('A01 組學生數量:', a01Students.length);
       a01Students.forEach((student, index) => {
-        console.log(`  ${index + 1}. ${student[1]} - ${student[2]}`);
+        console.log(`  ${index + 1}. ${student[1]} - ${student[2]}`);
       });
     }
     
@@ -743,43 +766,38 @@ function testAttendanceSheetStructure_v2() {
     
     console.log(`工作表大小: ${lastRow} 行 x ${lastCol} 欄`);
     
+    // ... (其餘的檢查邏輯) ...
     if(lastRow >= 1) {
-      // 檢查第1行 (學員總數資訊)
       const row1 = sheet.getRange(1, 1, 1, Math.min(10, lastCol)).getValues()[0];
       console.log('第1行 (學員總數):', row1);
     }
     
     if(lastRow >= 2) {
-      // 檢查第2行 (組別、學籍編號、姓名、日期標題)
       const row2 = sheet.getRange(2, 1, 1, Math.min(15, lastCol)).getValues()[0];
-      console.log('第2行 (標題行):', row2.slice(0, 10), '...'); // 只顯示前10個
+      console.log('第2行 (標題行):', row2.slice(0, 10), '...'); 
       
-      // 分析日期標題
-      const dateHeaders = row2.slice(3); // 從D欄開始是日期
+      const dateHeaders = row2.slice(3);
       const validDates = dateHeaders.filter(d => d && d.toString().includes('/'));
       console.log(`共有 ${validDates.length} 個日期欄位`);
       console.log('前5個日期:', validDates.slice(0, 5));
     }
     
     if(lastRow >= 3) {
-      // 檢查第3行 (星期資訊)
       const row3 = sheet.getRange(3, 1, 1, Math.min(15, lastCol)).getValues()[0];
-      console.log('第3行 (星期):', row3.slice(0, 10), '...'); // 只顯示前10個
+      console.log('第3行 (星期):', row3.slice(0, 10), '...');
     }
     
     if(lastRow >= 4) {
-      // 檢查學生資料
       const studentRows = sheet.getRange(4, 1, Math.min(10, lastRow - 3), Math.min(10, lastCol)).getValues();
       console.log('\n學生資料範例:');
       studentRows.forEach((row, index) => {
         const group = row[0] || '';
         const studentId = row[1] || '';
         const studentName = row[2] || '';
-        const attendanceData = row.slice(3, 8); // 前5個出席資料
-        console.log(`  ${index + 1}. 組別:${group}, 學號:${studentId}, 姓名:${studentName}, 出席:${attendanceData}`);
+        const attendanceData = row.slice(3, 8);
+        console.log(`  ${index + 1}. 組別:${group}, 學號:${studentId}, 姓名:${studentName}, 出席:${attendanceData}`);
       });
       
-      // 統計各組別學生數量
       console.log('\n=== 組別統計 ===');
       const allStudents = sheet.getRange(4, 1, lastRow - 3, 3).getValues();
       const groupStats = {};
@@ -792,15 +810,14 @@ function testAttendanceSheetStructure_v2() {
       });
       
       Object.keys(groupStats).forEach(group => {
-        console.log(`  ${group} 組: ${groupStats[group]} 位學生`);
+        console.log(`  ${group} 組: ${groupStats[group]} 位學生`);
       });
       
-      // 檢查 A01 組的詳細資料
       console.log('\n=== A01 組詳細資料 ===');
       const a01Students = allStudents.filter(row => row[0] === 'A01');
       console.log(`A01 組共 ${a01Students.length} 位學生:`);
       a01Students.forEach((student, index) => {
-        console.log(`  ${index + 1}. ${student[1]} - ${student[2]}`);
+        console.log(`  ${index + 1}. ${student[1]} - ${student[2]}`);
       });
     }
     
@@ -845,7 +862,7 @@ function testDateColumns() {
     Object.keys(monthGroups).forEach(month => {
       console.log(`\n${month}月份:`, monthGroups[month].length, '個日期');
       monthGroups[month].forEach(item => {
-        console.log(`  ${item.date} (第${item.colIndex}欄)`);
+        console.log(`  ${item.date} (第${item.colIndex}欄)`);
       });
     });
     
@@ -897,7 +914,7 @@ function testStudentAttendance() {
         else statusText = '未填';
         
         if(statusText !== '未填') {
-          console.log(`  ${date}: ${statusText}`);
+          console.log(`  ${date}: ${statusText}`);
         }
       }
     });
@@ -914,22 +931,22 @@ function runAttendanceTests_v2() {
   console.log('='.repeat(60));
   
   // 1. 檢查工作表結構
-  console.log('\n1. 檢查工作表結構');
+  console.log('\n1. 檢查工作表結構 (A 表內)');
   console.log('-'.repeat(30));
   testAttendanceSheetStructure_v2();
   
   // 2. 測試日期欄位
-  console.log('\n2. 測試日期欄位');
+  console.log('\n2. 測試日期欄位 (A 表內)');
   console.log('-'.repeat(30));
   testDateColumns();
   
   // 3. 測試特定學生記錄
-  console.log('\n3. 測試特定學生記錄');
+  console.log('\n3. 測試特定學生記錄 (A 表內)');
   console.log('-'.repeat(30));
   testStudentAttendance();
   
-  // 4. 測試 getExistingAttendance 函數
-  console.log('\n4. 測試取得既有記錄函數');
+  // 4. 測試 getExistingAttendance 函數 (讀取 C 表外部資料)
+  console.log('\n4. 測試取得既有記錄函數 (讀取 C 表)');
   console.log('-'.repeat(30));
   testGetExistingAttendance();
   
@@ -943,7 +960,7 @@ function testGetExistingAttendanceDebug() {
   var group = 'A01';
   var month = '10';
   
-  console.log('=== 詳細除錯 getExistingAttendance ===');
+  console.log('=== 詳細除錯 getExistingAttendance (來源 C 表) ===');
   console.log(`測試參數: 組別=${group}, 月份=${month}`);
   
   var result = getExistingAttendance(group, month);
@@ -954,9 +971,12 @@ function testGetExistingAttendanceDebug() {
   if(result.length > 0) {
     console.log('前5筆記錄:');
     result.slice(0, 5).forEach((record, index) => {
-      console.log(`  ${index + 1}. 學號: ${record.studentId}, 日期: ${record.date}, 狀態: ${record.status}`);
+      console.log(`  ${index + 1}. 學號: ${record.studentId}, 日期: ${record.date}, 狀態: ${record.status}`);
     });
   }
   
   return result;
 }
+-----------------------------------------------------
+Sidebar 以下
+-----------------------------------------------------
