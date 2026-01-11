@@ -1,3 +1,10 @@
+//-----------------------------------------------------------
+// version v0.3
+// release date 2026011
+// note: bug fix month format from v0.2 app.gs
+// 
+//-----------------------------------------------------------
+
 // ---------- UI / Sidebar ----------
 function onOpen(){
   SpreadsheetApp.getUi()
@@ -127,10 +134,15 @@ function getExistingAttendance(group, month){
         const dateStr = dateHeader.toString();
         
         // 檢查是否為目標月份的日期
-        // 支援 "10/01" 格式和其他可能的格式
-        const isTargetMonth = dateStr.startsWith(month + '/') || 
-                             dateStr.includes('/' + month + '/') ||
-                             (dateStr.includes('/') && dateStr.split('/')[0] === month);
+        // 解析月份數字進行比較，支援 "1" vs "01" 格式
+        const targetMonthNum = parseInt(month);
+        const dateParts = dateStr.split('/');
+        let isTargetMonth = false;
+        
+        if (dateParts.length >= 2) {
+          const dateMonthNum = parseInt(dateParts[0]);
+          isTargetMonth = dateMonthNum === targetMonthNum;
+        }
         
         if(!isTargetMonth) {
           return; // 跳過非目標月份的日期
